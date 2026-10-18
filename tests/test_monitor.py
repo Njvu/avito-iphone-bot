@@ -460,8 +460,6 @@ def test_avito_evaluation_step_and_reference(tmp_path, monkeypatch):
     from bot.evaluation import AvitoEvaluation, eval_condition, storage_from_label
     from bot.models import PhoneModel
     monkeypatch.setattr(settings, "market_source", "eval")
-    monkeypatch.setattr(settings, "avito_eval_markup", 1000)
-    monkeypatch.setattr(settings, "avito_eval_basis", "min")
     assert storage_from_label("1 ТБ") == 1024 and storage_from_label("256 ГБ") == 256
     assert eval_condition("Новое") == "Отличное" and eval_condition("Требуется ремонт") == "Хорошее"
     assert eval_condition("") == "Хорошее" and eval_condition("Удовлетворительное") == "Хорошее"

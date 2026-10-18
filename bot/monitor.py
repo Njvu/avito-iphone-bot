@@ -38,10 +38,10 @@ UNCLEAR = "состояние не подтверждено"
 SHOP = re.compile(
     r"(?<!в )(?<!из )(?<!с )(?<!не )магазин(?!е\b|а\b|ам\b|ами\b|ы\b|н)|наш\w* магазин|"
     r"(даем|даём|предоставля\w*|выда\w*|наша|от нас|от магазина|от продавца)\s+гаранти|"
-    r"гаранти\w* (от нас|от магазина|от продавца|\d+\s*(дн|мес|год))|"
+    r"гаранти\w* (от нас|от магазина|от продавца|\d+\s*(дн|мес|год)(?![^.,!?\n]{0,20}(apple|эпл|эппл)))|"
     r"(принима\w*|принимаю|возьм\w*)\s.{0,20}(trade.?in|трейд.?ин|в зач[её]т)|"
     r"рассрочк|в кредит|кредит от|"
-    r"сервисн\w* центр|наш\w* (салон|сервис)|ассортимент|доставка по (всей )?росси"
+    r"наш\w* (салон|сервис)|ассортимент|доставка по (всей )?росси"
 )
 
 
@@ -263,9 +263,9 @@ class Monitor:
                 continue
             logged = await self.avito.logged_in()
             if logged != account:
-                if account and not logged:
-                    await self.notify_admins("⚠️ Бот вышел из аккаунта Авито. Войдите снова в окне браузера бота — "
-                                             "без входа новые объявления могут приходить позже.")
+                if not logged and account is not False:
+                    await self.notify_admins("⚠️ Нет входа в аккаунт Авито — без входа новые объявления могут приходить "
+                                             "позже. Войдите снова: open_browser.bat или перенос входа (README).")
                 elif account is False and logged:
                     await self.notify_admins("✅ Вход в аккаунт Авито восстановлен.")
                 account = self.status["account"] = logged
@@ -620,7 +620,8 @@ class Monitor:
         html = await self.avito.fetch(search_url(region, page))
         cards = parse_search(html)
         if not cards:
-            (ROOT / "data" / f"empty_{region}_p{page}.html").write_text(html, encoding="utf-8")
+            if html:
+                (ROOT / "data" / f"empty_{region}_p{page}.html").write_text(html, encoding="utf-8")
             log.info("%s стр.%s пустая, повторяю", rname, page)
             cards = parse_search(await self.avito.fetch(search_url(region, page)))
         log.info("%s стр.%s: %s объявлений", rname, page, len(cards))
@@ -794,7 +795,12 @@ class Monitor:
             return None
         dmg, _ = self.assess(text, card.condition)
         key = seller_key(card.seller_url, card.seller)
-        if not dmg.accepted or not self.claim(key, phone, card.price):
+        if not dmg.accepted:
+            return None
+        need = settings.min_profit_broken if dmg.damage else settings.min_profit
+        if not card.below_market and card.price > self.market_limit(market) - need:
+            return None
+        if not self.claim(key, phone, card.price):
             return None
         caption = self.caption(card, region, phone, market, dmg, None, card.seller, card.snippet)
         task = asyncio.create_task(self._post_early(card, phone, caption, key or card.seller))

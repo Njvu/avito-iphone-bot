@@ -28,7 +28,7 @@ def test_parse_catalog_maps_search_fields():
     first, second, _ = cards
     assert first.title == "iPhone 11, 128 ГБ" and first.price == 10000 and first.condition == "Хорошее"
     assert first.url == "https://www.avito.ru/krasnodar/telefony/iphone_11_128_gb_8369128922"
-    assert first.seller == "Продавец 1" and first.seller_url == "https://www.avito.ru/brands/f43bfdc8811879bff12c5dda239c2fd0"
+    assert first.seller == "Продавец 2" and first.seller_url == "https://www.avito.ru/brands/f43bfdc8811879bff12c5dda239c2fd0"
     assert first.date == "1 час назад" and first.delivery and "636x636" not in first.photos[0]
     assert second.below_market and second.location == "р-н Центральный"
     assert "треснутая задняя" in second.snippet

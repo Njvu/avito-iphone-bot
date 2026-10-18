@@ -141,3 +141,27 @@ def test_status_here_sends_pins_and_remembers_message(tmp_path, monkeypatch):
 
     asyncio.run(control.cmd_status_here(Msg()))
     assert calls == [("send", "STATUS"), ("pin", -100, 42)] and control.live_target() == (-100, 42, 5)
+
+
+def test_browser_pauses_search_and_sends_a_link(tmp_path, monkeypatch):
+    store, m = _setup(tmp_path, monkeypatch)
+    answers = []
+
+    class Msg:
+        def __init__(self, chat_type="private"):
+            self.chat = SimpleNamespace(type=chat_type)
+
+        async def answer(self, text, **kw):
+            answers.append(text)
+
+    m.remote = SimpleNamespace(open=lambda: ["http://1.2.3.4:8080/c/token"])
+    asyncio.run(control.cmd_browser(Msg("supergroup")))
+    assert "в личке" in answers[0] and store.get_state("paused") != "1"
+    asyncio.run(control.cmd_browser(Msg()))
+    assert store.get_state("paused") == "1" and "http://1.2.3.4:8080/c/token" in answers[1] and "SSH" in answers[1]
+    m.remote = SimpleNamespace(open=lambda: ["https://x.trycloudflare.com/c/token"])
+    asyncio.run(control.cmd_browser(Msg()))
+    assert "SSH" not in answers[2]
+    m.remote = None
+    asyncio.run(control.cmd_browser(Msg()))
+    assert "выключена" in answers[3]

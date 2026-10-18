@@ -72,8 +72,6 @@ class Settings:
     avito_eval: bool = _bool("AVITO_EVAL", True)
     market_source: str = os.getenv("MARKET_SOURCE", "eval").strip().lower()
     avito_eval_city: str = os.getenv("AVITO_EVAL_CITY", "").strip() or CITY_NAME
-    avito_eval_basis: str = os.getenv("AVITO_EVAL_BASIS", "avg").strip().lower()
-    avito_eval_markup: int = _int("AVITO_EVAL_MARKUP", 0)
     avito_eval_per_step: int = _int("AVITO_EVAL_PER_STEP", 40)
     night_hours: tuple[int, int] = field(default_factory=lambda: _hours("NIGHT_HOURS", "1-5"))
     deep_pages: int = _int("DEEP_PAGES", 2)
@@ -81,7 +79,7 @@ class Settings:
     max_photos: int = _int("MAX_PHOTOS", 4)
     proxy_list: list[str] = field(default_factory=lambda: [
         proxy_url(x) for x in os.getenv("PROXY_LIST", "").split(",") if x.strip()])
-    free_proxies: bool = _bool("FREE_PROXIES", True)
+    free_proxies: bool = _bool("FREE_PROXIES", False)
     captcha_relay: bool = _bool("CAPTCHA_RELAY", True)
     captcha_wait_min: int = _int("CAPTCHA_WAIT_MIN", 10)
     captcha_cooldown_min: int = _int("CAPTCHA_COOLDOWN_MIN", 60)

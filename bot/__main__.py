@@ -1,17 +1,18 @@
 import asyncio
 import html
 import logging
+from contextlib import suppress
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.utils.token import TokenValidationError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats,
-                           CallbackQuery, ChatMemberUpdated, InlineKeyboardButton, InlineKeyboardMarkup,
-                           KeyboardButton, Message, ReplyKeyboardMarkup)
+                           CallbackQuery, ChatMemberUpdated, InaccessibleMessage, InlineKeyboardButton,
+                           InlineKeyboardMarkup, KeyboardButton, Message, ReplyKeyboardMarkup)
 
 from bot import control
 from bot.avito import Avito
@@ -345,7 +346,9 @@ async def cb_toggle(c: CallbackQuery):
         store.remove_tracked(key)
     elif key in ALL_MODELS:
         store.add_tracked(key)
-    await c.message.edit_text(models_text(), parse_mode=HTML, reply_markup=models_kb())
+    if c.message and not isinstance(c.message, InaccessibleMessage):
+        with suppress(TelegramBadRequest):
+            await c.message.edit_text(models_text(), parse_mode=HTML, reply_markup=models_kb())
     await c.answer("Сохранено")
 
 
@@ -435,6 +438,8 @@ async def run_price_refresh(bot: Bot, chat_id: int):
         await bot.send_message(chat_id, f"✅ База цен обновлена за {mins} мин: {done}цен в базе {store.evals_count()}.")
     except Exception as e:
         logging.warning("Обновление базы цен для %s: %s", chat_id, e)
+        with suppress(Exception):
+            await bot.send_message(chat_id, f"⚠️ Обновление базы цен прервалось: {e}")
     finally:
         PRICE_CHATS.discard(chat_id)
 
@@ -509,6 +514,7 @@ async def setup_bot_profile(bot: Bot):
         BotCommand(command="block", description="Заблокировать продавца: /block ссылка на профиль"),
         BotCommand(command="pause", description="Пауза мониторинга"),
         BotCommand(command="resume", description="Продолжить мониторинг"),
+        BotCommand(command="browser", description="Войти в Авито в браузере бота (ссылка на 15 мин)"),
         BotCommand(command="debug", description="Отладка: логи, ошибки, скорость, IP, проверка объявления"),
         BotCommand(command="speed", description="Скорость и статистика за час"),
         BotCommand(command="errors", description="Ошибки за последний час"),
@@ -601,6 +607,9 @@ async def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     bot = make_bot()
     await check_telegram(bot)
+    if not settings.admin_ids:
+        logging.warning("ADMIN_IDS пуст: напишите боту /myid и впишите ID в .env. / "
+                        "ADMIN_IDS is empty: send /myid to the bot and put the ID into .env.")
     store = Store(settings.db_path, tuple(REGIONS.values()), settings.market_reseller_listings)
     avito = Avito()
     await avito.start()

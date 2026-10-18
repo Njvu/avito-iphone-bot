@@ -144,10 +144,10 @@ class Avito:
             if not self._ctx:
                 return None
             await asyncio.sleep(max(0.0, self._next_request - time.monotonic()))
-            page = await self._page()
-            if not page.url.startswith(BASE):
-                return None
             try:
+                page = await self._page()
+                if not page.url.startswith(BASE):
+                    return None
                 res = await self._catalog_json(page, path)
                 if res.get("pow") and await self._solve_pow(page):
                     res = await self._catalog_json(page, path)
@@ -217,6 +217,10 @@ class Avito:
             if await img.is_visible():
                 return await img.screenshot()
             return await page.screenshot()
+
+    async def show(self, url: str):
+        async with self._lock:
+            await (await self._page()).goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
 
     async def page_screenshot(self) -> bytes:
         async with self._lock:

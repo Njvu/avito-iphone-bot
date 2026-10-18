@@ -121,3 +121,49 @@ def test_post_waits_flood_limit_and_no_sleep_after_last_try(tmp_path, monkeypatc
 
     (ids, error), sleeps = _post(tmp_path, monkeypatch, Down(), photos=())
     assert ids == [] and isinstance(error, RuntimeError) and sleeps == [10, 10]
+
+
+def test_unlocked_wording_is_not_a_lock():
+    assert reject_reason("iPhone 13, 128 ГБ", "Разлоченный, работает с любой симкой") is None
+    assert reject_reason("iPhone 13, 128 ГБ", "Залочен под оператора") == "лочка/R-SIM"
+
+
+def test_cracked_back_glass_is_not_a_cracked_screen():
+    dmg = inspect_damage("Разбито заднее стекло, всё работает", "Хорошее", "warn", {"back"})
+    assert dmg.accepted and dmg.damage
+    assert not inspect_damage("Разбит экран, всё работает", "Хорошее", "warn", {"back"}).accepted
+
+
+def test_private_seller_phrases_are_not_shop():
+    for text in ("Гарантия 8 мес от Apple, всё работает", "Обслуживался в сервисном центре, батарея менялась"):
+        assert not mon.SHOP.search(text.lower()), text
+    assert mon.SHOP.search("гарантия 3 мес, рассрочка")
+
+
+def test_price_estimator_skips_a_failing_combination(tmp_path):
+    from bot.evaluation import PREDICTION, AvitoEvaluation, RateLimited
+
+    class Flaky(AvitoEvaluation):
+        calls = 0
+
+        async def _call(self, path, body=None, patient=False):
+            if path == PREDICTION:
+                Flaky.calls += 1
+                if Flaky.calls == 1:
+                    raise RuntimeError("500")
+                return {"isPredicted": True, "min": 10000, "max": 12000}
+            raise AssertionError(path)
+
+        async def location_id(self):
+            return 1
+
+        async def _model_ids(self):
+            return {"13": 1}
+
+        async def _model_options(self, model, model_id):
+            return {128: 1, 256: 2}, 0
+
+    store = Store(tmp_path / "t.sqlite")
+    ev = Flaky(None, store, "Краснодар")
+    assert asyncio.run(ev.step(["13"], budget=10)) == 3
+    assert issubclass(RateLimited, RuntimeError)

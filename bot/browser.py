@@ -11,8 +11,7 @@ async def main():
         ctx = await launch_context(pw, settings.proxy_url, headless=False)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
         await page.goto(search_url(next(iter(REGIONS))))
-        print("Войдите в аккаунт Авито или решите капчу в открытом окне, затем закройте окно.
-"
+        print("Войдите в аккаунт Авито или решите капчу в открытом окне, затем закройте окно.\n"
               "Log in to Avito or solve a captcha in the opened window, then close it.")
         await page.wait_for_event("close", timeout=0)
         await ctx.close()

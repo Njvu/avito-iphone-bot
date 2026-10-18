@@ -35,10 +35,10 @@ let busy = false, down = false, last = 0;
 function refresh() {
   if (busy) return;
   busy = true;
-  const n = new Image();
-  n.onload = () => { img.src = n.src; busy = false; };
-  n.onerror = () => { busy = false; st.textContent = "Сессия закрыта: капча решена или ссылка устарела."; clearInterval(timer); };
-  n.src = base + "/shot.jpg?" + Date.now();
+  fetch(base + "/shot.jpg?" + Date.now(), {cache: "no-store"}).then(r => {
+    if (r.ok) return r.blob().then(b => { const old = img.src; img.src = URL.createObjectURL(b); if (old) URL.revokeObjectURL(old); });
+    if (r.status !== 503) { st.textContent = "Сессия закрыта: капча решена или ссылка устарела."; clearInterval(timer); }
+  }).catch(() => {}).finally(() => { busy = false; });
 }
 const timer = setInterval(refresh, 700);
 refresh();
@@ -128,7 +128,11 @@ class RemoteControl:
 
     async def shot(self, request: web.Request):
         self._check(request)
-        return web.Response(body=await self.avito.remote_screenshot(), content_type="image/jpeg",
+        try:
+            body = await self.avito.remote_screenshot()
+        except Exception:
+            return web.Response(status=503, headers={"Cache-Control": "no-store"})
+        return web.Response(body=body, content_type="image/jpeg",
                             headers={"Cache-Control": "no-store"})
 
     async def input(self, request: web.Request):

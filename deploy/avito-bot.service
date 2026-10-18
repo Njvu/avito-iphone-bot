@@ -10,6 +10,7 @@ WorkingDirectory=/opt/avito-iphone-bot
 ExecStart=/opt/avito-iphone-bot/.venv/bin/python -m bot
 Environment=HEADLESS=true
 Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Europe/Moscow
 Restart=always
 RestartSec=15
 

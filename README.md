@@ -210,7 +210,8 @@ Use a spare account.
 4. Start `run.bat` again. The log says "Авито: вход в аккаунт — есть" (logged in).
 
 With `HEADLESS=false` you can also log in directly in the running bot's window. The bot tells admins in Telegram if
-the session is lost. `open_browser.bat` is also the way to solve a captcha by hand.
+the session is lost. `open_browser.bat` is also the way to solve a captcha by hand. On a server (no window) log in
+through `/browser` in Telegram.
 
 ## Running on a Linux server (Ubuntu)
 
@@ -229,8 +230,15 @@ Chromium, registers a systemd service (`deploy/avito-bot.service`) that starts t
 failure, and opens ports 22 and 8080.
 
 In the server's `.env`: `HEADLESS=true`, `TG_PROXY=` (empty), `PUBLIC_URL=http://SERVER_IP:8080` (captcha link),
-`PROXY_URL`, `PROXY_ROTATE_URL`. Moving from a PC: copy the folder together with `.env` and `data/` (database and
-Avito login) to the server before running `setup.sh`, and stop the bot on the PC.
+`PROXY_URL`, `PROXY_ROTATE_URL`. The service runs on Moscow time (`TZ=Europe/Moscow`); `setup.sh` does not enable a
+firewall (on one that is already active it only opens port 8080).
+
+Moving from a PC: stop the bot on the PC and copy the project folder with `.env` and `data/bot.sqlite3` to the server
+before running `setup.sh`. A Windows browser profile cannot be read on Linux, so log in to Avito again on the server:
+send `/browser` to the bot — it pauses the search and replies with a link to its live browser (valid 15 minutes, opens
+on one device). Log in to Avito on that page from a phone or PC and send `/resume`. The page is plain HTTP, so it is safer to type the
+password through an SSH tunnel: `ssh -L 8080:127.0.0.1:8080 root@SERVER_IP`, then open the same link with the address
+replaced by `http://127.0.0.1:8080`.
 
 Useful commands:
 
@@ -274,6 +282,7 @@ Commands:
 | `/check <url>` | Whether a listing would be posted and why not (nothing is posted) |
 | `/log 50`, `/logfile`, `/errors 60` | Log tail, the whole log file, warnings and errors over N minutes |
 | `/ip`, `/rotate`, `/screen` | IP seen by Avito and login state; change IP; screenshot of the bot's browser |
+| `/browser` | Link to the bot's live browser for 15 min (search paused): log in to Avito or solve a captcha, then `/resume` |
 | `/restart` | Restart the bot (`run.bat`/systemd bring it back in ~15 s) |
 | `/admins`, `/add_admin`, `/remove_admin` | Admins: reply to a message, forward one, or pass an ID. Only owners from `ADMIN_IDS` can change the list |
 | `/myid` | Show your Telegram ID (anyone) |

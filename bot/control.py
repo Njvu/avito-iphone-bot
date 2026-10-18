@@ -5,6 +5,7 @@ import re
 import statistics
 from collections import Counter
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
@@ -12,11 +13,11 @@ from urllib.parse import urlsplit
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command, CommandObject
-from aiogram.types import (BufferedInputFile, CallbackQuery, FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup,
-                           Message)
+from aiogram.types import (BufferedInputFile, CallbackQuery, FSInputFile, InaccessibleMessage, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message)
 
-from bot.avito import direct_ip_info
-from bot.config import ROOT, settings
+from bot.avito import direct_ip_info, search_url
+from bot.config import REGIONS, ROOT, settings
 from bot.damage import DEFAULT_ALLOWED, DEFECTS
 from bot.db import Store
 from bot.monitor import Monitor
@@ -214,6 +215,8 @@ async def cmd_rotate(m: Message):
         await m.answer("✅ IP сменён." if rotated else "⚠️ Сменить IP не удалось (или прокси без смены по ссылке).")
     except asyncio.TimeoutError:
         await m.answer("⏳ Смена IP ещё не выполнена — бот занят (блок/пауза). Статус: /status")
+    except Exception as e:
+        await m.answer(f"⚠️ Сменить IP не удалось: {html.escape(str(e))}")
 
 
 @router.message(Command("ip"))
@@ -232,6 +235,27 @@ async def cmd_screen(m: Message):
     except Exception as e:
         return await m.answer(f"Не удалось сделать скриншот: {html.escape(str(e))[:200]}", parse_mode=HTML)
     await m.answer_photo(BufferedInputFile(shot, "screen.png"), caption="🖥 Браузер бота сейчас")
+
+
+@router.message(Command("browser"))
+async def cmd_browser(m: Message):
+    remote = ctx.monitor.remote
+    if not remote:
+        return await m.answer("Страница браузера выключена: REMOTE_ENABLED=false или занят REMOTE_PORT.")
+    if m.chat.type != "private":
+        return await m.answer("Ссылку на браузер бота присылаю только в личке — напишите /browser мне в личные сообщения.")
+    ctx.store.set_state("paused", "1")
+    try:
+        await asyncio.wait_for(ctx.monitor.avito.show(search_url(next(iter(REGIONS)))), 45)
+    except Exception as e:
+        log.info("/browser: не удалось открыть Авито: %s", e)
+    urls = remote.open()
+    plain = "" if all(u.startswith("https://") for u in urls) else (
+        "\n⚠️ Соединение без шифрования: пароль безопаснее вводить через SSH-туннель — "
+        "ssh -L 8080:127.0.0.1:8080 root@СЕРВЕР, затем та же ссылка с адресом http://127.0.0.1:8080.")
+    await m.answer("🖥 Браузер бота на 15 минут, поиск на паузе. Войдите в Авито (или решите капчу):\n"
+                   + "\n".join(urls) + "\nСсылка открывается на одном устройстве. После входа — /resume." + plain,
+                   disable_web_page_preview=True)
 
 
 @router.message(Command("check"))
@@ -335,10 +359,9 @@ async def cb_filter(c: CallbackQuery):
         allowed ^= {key}
     ctx.store.set_allowed_defects(allowed)
     log.info("Фильтр поломок изменён (%s): %s", c.from_user.id, ", ".join(sorted(allowed)) or "только целые")
-    try:
-        await c.message.edit_text(filter_text(), parse_mode=HTML, reply_markup=filter_kb())
-    except TelegramBadRequest:
-        pass
+    if c.message and not isinstance(c.message, InaccessibleMessage):
+        with suppress(TelegramBadRequest):
+            await c.message.edit_text(filter_text(), parse_mode=HTML, reply_markup=filter_kb())
     await c.answer("Сохранено — действует со следующей проверки")
 
 
@@ -355,7 +378,7 @@ DEBUG_HELP = """<b>🛠 Отладка и управление</b>
 /speed — проверки, блоки, посты, свежесть за час и последние посты
 /log 50 — последние строки лога · /logfile — файл лога · /errors 60 — ошибки за N минут
 /ip — какой IP видит Авито и есть ли вход в аккаунт · /rotate — сменить IP
-/screen — скриншот браузера бота · /filter — какие поломки пропускать (кнопки ✅/❌)
+/screen — скриншот браузера бота · /browser — войти в Авито в браузере бота · /filter — какие поломки пропускать (кнопки ✅/❌)
 /check ссылка — пройдёт ли объявление и почему
 /restart — перезапустить бота
 /admins — список админов · /add_admin (ответом или ID) · /remove_admin — только владельцы

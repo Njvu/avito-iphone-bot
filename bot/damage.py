@@ -49,6 +49,7 @@ _PROT_BROKEN = rf"{_PROT}.{{0,30}}(разбит|трещин|треснул|ло
 _CRACK = r"(разбит|трещин|треснул|лопнул|побит|раскол|паутин|сетк[аи] трещ|сломан)"
 _GAP = r"[^,.;!?\n]{0,25}"
 _SCREEN = rf"{_CRACK}\w*{_GAP}(экран|стекл|диспле|модул)|(экран|стекл|диспле)\w*{_GAP}{_CRACK}"
+_BACK_GLASS = r"задн\w*\s+стекл\w*"
 _BACK = rf"{_CRACK}\w*{_GAP}(крышк|задн|корпус)|(крышк|задн\w* стекл|корпус)\w*{_GAP}{_CRACK}"
 _ALLOWED_PART = r"(экран\w*|стекл\w*|диспле\w*|модул\w*|крышк\w*|задн\w*|корпус\w*)"
 _ALLOWED_PHRASE = rf"{_ALLOWED_PART}\s*(\w+\s*){{0,2}}{_CRACK}\w*|{_CRACK}\w*\s*(\w+\s*){{0,2}}{_ALLOWED_PART}"
@@ -209,7 +210,7 @@ def inspect_damage(text: str, condition: str = "", unclear_mode: str = "warn",
     cleaned = re.sub(_PROT_BROKEN, " ", s)
     cleaned = re.sub(_PROT + r"\w*", " ", cleaned)
     damage = []
-    if re.search(_SCREEN, cleaned):
+    if re.search(_SCREEN, re.sub(_BACK_GLASS, " крышка ", cleaned)):
         if "screen" not in allowed:
             return DamageResult(False, reason="разбит экран (выключено в фильтре)", battery=battery)
         damage.append("разбит экран/стекло")
@@ -242,7 +243,7 @@ def market_dirt(text: str, condition: str = "") -> str:
     if normalize(condition).strip() == "требуется ремонт":
         return "требуется ремонт"
     cleaned = re.sub(_PROT_BROKEN, " ", s)
-    if re.search(_SCREEN, cleaned):
+    if re.search(_SCREEN, re.sub(_BACK_GLASS, " крышка ", cleaned)):
         return "разбит экран"
     if re.search(_BACK, cleaned):
         return "разбита крышка"

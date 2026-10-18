@@ -17,7 +17,7 @@ def test_parse_search_real_markup():
     assert a.url == "https://www.avito.ru/essentuki/telefony/iphone_12_128_gb_sim_esim_8408773533"
     assert a.condition == "Требуется ремонт" and a.delivery and "плату" in a.snippet
     assert a.photos == ["https://90.img.avito.st/image/1/1.K6j5"]
-    assert b.seller == "Продавец 2" and b.seller_url.endswith("/brands/6978eaf7895016a55994d96872637e6b")
+    assert b.seller == "Продавец 1" and b.seller_url.endswith("/brands/6978eaf7895016a55994d96872637e6b")
     assert b.location == "Пятигорск" and b.price == 39900
     assert c.price == 48000 and c.snippet == "Продаю 15 про."
 
@@ -27,7 +27,7 @@ def test_parse_item_page():
     assert item.params["Экран"] == "Без дефектов"
     assert item.params["Состояние"] == "Удовлетворительное"
     assert item.params["Работа устройства"] == "Включается"
-    assert len(item.photos) == 2 and item.seller == "Продавец 4" and item.seller_label == "Частное лицо"
+    assert len(item.photos) == 2 and item.seller == "Продавец 5" and item.seller_label == "Частное лицо"
     assert "256 ГБ" in item.description
 
 

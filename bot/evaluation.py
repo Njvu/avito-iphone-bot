@@ -32,6 +32,10 @@ def storage_from_label(label: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+class RateLimited(RuntimeError):
+    pass
+
+
 def eval_price(low: int, high: int, basis: str = "avg") -> int:
     return {"max": high, "min": low}.get(basis, (low + high) // 2)
 
@@ -75,18 +79,20 @@ class AvitoEvaluation:
             self._models.clear()
             self._options.clear()
 
-    async def _call(self, path: str, body: dict | None = None, patient: bool = False):
+    async def _call(self, path: str, body: dict | None = None, patient: bool = False) -> dict:
         for attempt in range(RETRIES + 1):
             await asyncio.sleep(random.uniform(*PAUSE))
             data = await self.avito.api(path, body)
             limited = isinstance(data, dict) and data.get("__status") in RATE_LIMITED
             if limited and not patient:
                 self.cooldown_until = time.monotonic() + COOLDOWN
-                raise RuntimeError(f"{path}: {data['__status']}, следующая попытка через {COOLDOWN // 60} мин")
+                raise RateLimited(f"{path}: {data['__status']}, следующая попытка через {COOLDOWN // 60} мин")
             if limited and attempt < RETRIES:
                 log.info("Калькулятор Авито: слишком часто (%s), жду %s с", data["__status"], RETRY_WAIT)
                 await asyncio.sleep(RETRY_WAIT)
                 continue
+            if limited:
+                raise RateLimited(f"{path}: {data['__status']}")
             if not isinstance(data, dict) or "__status" in data:
                 raise RuntimeError(f"{path}: {data.get('__status') if isinstance(data, dict) else data}")
             return data
@@ -157,7 +163,13 @@ class AvitoEvaluation:
                         body = {"categoryId": CATEGORY, "locationID": location,
                                 "params": _params(memory=mem_id, model=ids[model], brand=APPLE,
                                                   condition=CONDITIONS[cond], color=color)}
-                        pred = await self._call(PREDICTION, body, patient=patient)
+                        try:
+                            pred = await self._call(PREDICTION, body, patient=patient)
+                        except RateLimited:
+                            raise
+                        except Exception as e:
+                            log.warning("Калькулятор Авито, %s %s ГБ «%s»: %s", model, storage, cond, e)
+                            continue
                         done += 1
                         ok = pred.get("isPredicted") and pred.get("min") and pred.get("max")
                         self.store.save_eval(model, storage, cond, int(pred["min"]) if ok else 0,
