@@ -1,0 +1,17 @@
+[Unit]
+Description=Avito iPhone bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=avito
+Group=avito
+WorkingDirectory=/opt/avito-iphone-bot
+ExecStart=/opt/avito-iphone-bot/.venv/bin/python -m bot
+Environment=HEADLESS=true
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
