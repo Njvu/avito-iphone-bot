@@ -18,6 +18,8 @@ def test_status_shows_live_rhythm_and_refresh_progress(tmp_path, monkeypatch):
     from bot.config import settings
     monkeypatch.setattr(settings, "fast_json", True)
     monkeypatch.setattr(settings, "fast_json_sec", 15)
+    monkeypatch.setattr(settings, "block_slowdown_min", 10)
+    monkeypatch.setattr(settings, "block_slowdown_factor", 2.0)
     monkeypatch.setattr(settings, "model_sweep", 1)
     monkeypatch.setattr(mon, "is_night", lambda: False)
     ui.store = Store(tmp_path / "t.sqlite")

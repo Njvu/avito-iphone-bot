@@ -28,11 +28,11 @@ usually within **seconds** of the listing appearing in Avito search.
 ## Features
 
 **Search**
-- The first search page sorted by date is read every ~7 s (randomised 5–9 s) through the same lightweight JSON
+- The first search page sorted by date is read every ~4 s (randomised 3–5 s) through the same lightweight JSON
   request the website itself uses: ≈0.4 s instead of ≈8 s for a full page load. Falls back to page loads if the
   JSON request is unavailable.
 - Every 10 minutes a full pass over pages 1–5 (also JSON, ~5 s) catches anything missed.
-- At night (1:00–5:00) the first page is checked every 2 minutes and the price base is refreshed.
+- The same rhythm runs around the clock; at night (1:00–5:00) the price base is refreshed in the background.
 - Only listings younger than 24 h; posted and rejected listings are never opened again.
 
 **Filters**
@@ -63,8 +63,8 @@ usually within **seconds** of the listing appearing in Avito search.
 - Can post to several groups and channels at once.
 
 **Reliability**
-- On a block or captcha the bot rotates the mobile proxy IP and carries on; after a block it checks half as often
-  for 10 minutes. Admins get a captcha only if rotation fails: a screenshot plus a link to the bot's live browser,
+- On a block or captcha the bot rotates the mobile proxy IP and carries on; after a block it checks 1.5× less often
+  for 5 minutes. Admins get a captcha only if rotation fails: a screenshot plus a link to the bot's live browser,
   solvable from a phone.
 - Watchdog: admins are notified if Avito could not be checked for 30 minutes and again when it recovers, and also
   when the Avito login is lost.
@@ -93,7 +93,7 @@ Example post (the bot writes in Russian):
 
 | Metric | Before | After |
 |---|---|---|
-| First-page check | full page load every 45 s | JSON list every ~7 s |
+| First-page check | full page load every 45 s | JSON list every ~4 s |
 | Seen in search → posted to the group | 25–40 s | 1–3 s (instant post) |
 | Published on Avito → seen by the bot | 3–5 min | ~1–1.5 min (the rest is Avito's own indexing delay) |
 | Full pass over 5 pages | ~1.5 min | ~5 s |
@@ -105,7 +105,7 @@ moment the bot first saw it, and a 40-minute "source race" compared several data
 
 ```mermaid
 flowchart LR
-    A[Avito search JSON<br/>every ~7 s] --> P[Parser<br/>catalog.py / parser.py]
+    A[Avito search JSON<br/>every ~4 s] --> P[Parser<br/>catalog.py / parser.py]
     P --> F[Filters<br/>models.py / damage.py]
     F --> M[Market price<br/>Avito estimator ranges]
     M -->|deal| I[Instant post<br/>Telegram]
@@ -262,6 +262,7 @@ All commands are admin-only (except `/myid`). The interface is in Russian. `/sta
 | 🔧 Ремонт | Repair price table (reference only) |
 | 🧰 Фильтр | Which defects to accept or reject |
 | ⏸ Пауза / ▶️ Запуск | Pause and resume the search |
+| 🔁 Рестарт | Restart the bot (with confirmation, ~30 s) |
 
 Commands:
 
@@ -285,6 +286,7 @@ Commands:
 | `/browser` | Link to the bot's live browser for 15 min (search paused): log in to Avito or solve a captcha, then `/resume` |
 | `/restart` | Restart the bot (`run.bat`/systemd bring it back in ~15 s) |
 | `/admins`, `/add_admin`, `/remove_admin` | Admins: reply to a message, forward one, or pass an ID. Only owners from `ADMIN_IDS` can change the list |
+| `/say text`, `/say_admins text` | Owners only: write as the bot to the group / to every admin privately; as a reply — forward a photo, video or file |
 | `/myid` | Show your Telegram ID (anyone) |
 | `/debug` | List of debug commands |
 
@@ -303,11 +305,12 @@ Restart the bot after changing `.env`. Every option with a comment — [`.env.ex
 | `PROXY_ROTATE_URL` | empty | The proxy's "change IP" link |
 | `PROXY_LIST` | empty | Fallback proxies, comma-separated |
 | `HEADLESS` | `true` | `false` shows the browser window |
-| `FAST_JSON_SEC` | `7` | First-page check interval, seconds |
+| `FAST_JSON_SEC` | `4` | First-page check interval, seconds |
 | `CHECK_INTERVAL_MIN/MAX` | `10` | Full pass interval, minutes |
 | `DEEP_PAGES` | `4` | Pages beyond the first in a full pass |
-| `NIGHT_HOURS`, `NIGHT_FAST_SEC` | `1-5`, `120` | Night mode and its interval |
+| `NIGHT_HOURS`, `NIGHT_FAST_SEC` | `1-5`, `0` | Night hours (price refresh) and an optional slower night interval (0 = same as day) |
 | `MAX_AGE_HOURS` | `24` | Maximum listing age |
+| `MAX_POST_DELAY_SEC` | `0` | Never post a deal later than N seconds after its publication on Avito (0 = no limit) |
 | `MIN_PROFIT` | `1000` | How many ₽ below the range maximum the price must be |
 | `INSTANT_ALL` | `true` | Post before the listing page is verified |
 | `MAX_PHOTOS` | `4` | Photos per post |
@@ -327,7 +330,7 @@ Set `CITY` to the city's slug from the Avito URL (`avito.ru/moskva` → `moskva`
 
 - **A mobile proxy** works best: on a block the bot calls `PROXY_ROTATE_URL`, gets a new IP within seconds and
   carries on. Rotation clears cookies and anti-bot marks but keeps the Avito login.
-- Occasional blocks and IP changes are normal; the bot slows down for 10 minutes after a block.
+- Occasional blocks and IP changes are normal; the bot slows down for 5 minutes after a block.
 - **Captcha:** if rotation fails, admins get a screenshot and a one-time link to a page where the captcha can be
   solved in the bot's live browser from a phone (on the home Wi-Fi, via `PUBLIC_URL` on a server, or through
   `TUNNEL=cloudflared`, which needs `tools/cloudflared.exe`).

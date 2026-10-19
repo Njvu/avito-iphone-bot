@@ -70,7 +70,7 @@ def main_kb() -> ReplyKeyboardMarkup:
         [KeyboardButton(text=B_MARKET), KeyboardButton(text=B_STATS)],
         [KeyboardButton(text=B_REPAIR), KeyboardButton(text=B_PRICES)],
         [KeyboardButton(text=B_RESUME if paused else B_PAUSE), KeyboardButton(text=control.B_FILTER)],
-        [KeyboardButton(text=B_HELP)],
+        [KeyboardButton(text=control.B_RESTART), KeyboardButton(text=B_HELP)],
     ])
 
 
@@ -521,6 +521,8 @@ async def setup_bot_profile(bot: Bot):
         BotCommand(command="check", description="Пройдёт ли объявление: /check ссылка"),
         BotCommand(command="filter", description="Фильтр поломок: что пропускать"),
         BotCommand(command="admins", description="Админы бота"),
+        BotCommand(command="say", description="Написать в группу от имени бота (владельцы)"),
+        BotCommand(command="say_admins", description="Написать всем админам в личку от имени бота (владельцы)"),
         BotCommand(command="myid", description="Мой Telegram ID"),
     ]
     group_cmds = [BotCommand(command="add_here", description="Публиковать находки в эту группу"),

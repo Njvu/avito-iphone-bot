@@ -23,6 +23,7 @@ class Card:
     photos: list[str] = field(default_factory=list)
     badges: list[str] = field(default_factory=list)
     date: str = ""
+    published: float | None = None
 
     @property
     def age_hours(self) -> float | None:

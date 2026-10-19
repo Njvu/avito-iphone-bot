@@ -15,7 +15,8 @@ from aiogram.types import BufferedInputFile, InputMediaPhoto
 from bot.ai import analyze
 from bot.captcha import NEW_IMAGE, CaptchaRelay, captcha_caption
 from bot.catalog import MODEL_IDS, catalog_path, parse_catalog
-from bot.avito import Avito, Blocked, ProxyDown, direct_ip_info, download_photos, exit_ip, search_url
+from bot.avito import (PHOTO_WAIT, Avito, Blocked, ProxyDown, Unavailable, direct_ip_info, download_photos, exit_ip,
+                       search_url)
 from bot.config import REGIONS, ROOT, settings
 from bot.damage import BAD, DEFAULT_ALLOWED, blocked, flag_confirmed, inspect_damage, market_dirt
 from bot.db import Store
@@ -104,6 +105,7 @@ ROTATE_TIMEOUT_SEC, ROTATE_RETRY_SEC = 60, 30
 ERROR_RETRY_SEC = 30
 SWEEP_PAUSE_SEC = 300
 LOCATION_RETRY_SEC = 600
+SERVER_ERROR_RETRY_SEC = 1.5
 PROXY_DOWN_PAUSE = (30, 300)
 
 
@@ -162,7 +164,7 @@ class Monitor:
         self.location: int | None = None
         self.location_retry_at = 0.0
         self.unverified: dict[str, tuple] = {}
-        self.events: dict[str, deque] = {k: deque() for k in ("check", "block", "post", "rotation", "removed", "html")}
+        self.events: dict[str, deque] = {k: deque() for k in ("check", "block", "post", "rotation", "removed", "html", "late")}
         self.lags: deque = deque(maxlen=50)
         self.rotation_wanted: asyncio.Future | None = None
         self.proxy_down = 0
@@ -215,6 +217,16 @@ class Monitor:
     def count(self, kind: str, seconds: float = 3600) -> int:
         now = time.monotonic()
         return sum(1 for t in self.events[kind] if now - t <= seconds)
+
+    def post_delay(self, card: Card) -> float:
+        now = time.time()
+        seen = self.store.seen_at(card.id)
+        delays = [now - datetime.fromisoformat(seen).timestamp()] if seen else []
+        if card.published:
+            delays.append(now - card.published)
+        if card.age_hours is not None:
+            delays.append(card.age_hours * 3600)
+        return max(delays, default=0.0)
 
     def request_rotation(self) -> asyncio.Future:
         if not self.rotation_wanted or self.rotation_wanted.done():
@@ -316,7 +328,7 @@ class Monitor:
     def fast_delay(self) -> float:
         if not settings.fast_interval_sec:
             return 0
-        if is_night():
+        if is_night() and settings.night_fast_sec:
             return settings.night_fast_sec
         base = self.fast_base()
         jitter = min(settings.fast_jitter_sec, base * 0.25)
@@ -328,7 +340,7 @@ class Monitor:
     def rhythm(self) -> str:
         if not settings.fast_interval_sec:
             return f"полный проход раз в {settings.check_interval_min}–{settings.check_interval_max} мин"
-        if is_night():
+        if is_night() and settings.night_fast_sec:
             fast = f"ночь: 1-я стр. раз в {settings.night_fast_sec} с"
         else:
             base = self.fast_base()
@@ -553,8 +565,11 @@ class Monitor:
                             seen.add(card.id)
                             candidates.append(card)
                     candidates.sort(key=freshness)
+                    deferred = []
                     for card in candidates:
-                        outcome[await self.consider(card, rname)] += 1
+                        outcome[await self.consider(card, rname, deferred)] += 1
+                    for args in deferred:
+                        await self.deep_check(*args)
                     if not fresh_on_page and not bootstrap and not model:
                         break
         finally:
@@ -597,7 +612,10 @@ class Monitor:
         location = await self.location_id()
         if not location:
             return []
-        data = await self.avito.catalog(catalog_path(location, 1, model))
+        try:
+            data = await self.avito.catalog(catalog_path(location, 1, model))
+        except Unavailable:
+            return []
         if data is None:
             self.sweep_paused_until = time.monotonic() + SWEEP_PAUSE_SEC
             log.info("Перебор по моделям: Авито не отдаёт список iPhone %s — пауза %s мин", model, SWEEP_PAUSE_SEC // 60)
@@ -606,9 +624,21 @@ class Monitor:
         log.info("%s iPhone %s (JSON): %s объявлений", rname, model, len(cards))
         return cards
 
+    async def catalog_retrying(self, path: str) -> dict | None:
+        try:
+            return await self.avito.catalog(path)
+        except Unavailable:
+            await asyncio.sleep(SERVER_ERROR_RETRY_SEC)
+            return await self.avito.catalog(path)
+
     async def page_cards(self, region: str, rname: str, page: int, light: bool) -> list[Card]:
         if light and settings.fast_json and (location := await self.location_id()):
-            cards = parse_catalog(await self.avito.catalog(catalog_path(location, page)) or {})
+            try:
+                data = await self.catalog_retrying(catalog_path(location, page))
+            except Unavailable as e:
+                log.info("%s стр.%s: Авито ответил HTTP %s — повторю JSON в следующей проверке", rname, page, e)
+                return []
+            cards = parse_catalog(data or {})
             if cards:
                 log.info("%s стр.%s (JSON): %s объявлений", rname, page, len(cards))
                 return cards
@@ -649,7 +679,7 @@ class Monitor:
                                 not reason, card.seller, card.avito_mark)
         return reason or "в рынок"
 
-    async def consider(self, card: Card, region: str) -> str:
+    async def consider(self, card: Card, region: str, deferred: list | None = None) -> str:
         phone = detect_phone(card.title, card.snippet)
         if not phone or not card.price:
             return "не iPhone/без цены"
@@ -684,12 +714,21 @@ class Monitor:
             return "нет цены рынка"
         elif card.price > self.market_limit(market) - settings.min_profit:
             return "нет выгоды"
+        delay = self.post_delay(card)
+        if settings.max_post_delay_sec and delay > settings.max_post_delay_sec:
+            self.store.mark_checked(card.id, card.price)
+            self.note("late")
+            log.info("Поздно: выгодное объявление опубликовано %.1f мин назад — не публикую %s", delay / 60, card.url)
+            return "поздно"
         early = self.post_early(card, region, phone, market, quick)
-        await self.deep_check(card, region, phone, market, early)
+        if deferred is None:
+            await self.deep_check(card, region, phone, market, early)
+        else:
+            deferred.append((card, region, phone, market, early))
         return "мгновенно" if early else "открыто"
 
     async def explain(self, url: str) -> list[str]:
-        html = await self.avito.fetch(url)
+        html = await self.avito.fetch(url, aux=True)
         if is_closed(html):
             return ["❌ Объявление снято с публикации"]
         item = parse_item(html)
@@ -810,7 +849,10 @@ class Monitor:
         return task
 
     async def _post_early(self, card, phone, caption, seller):
-        photos = await download_photos(card.photos, settings.max_photos)
+        try:
+            photos = await asyncio.wait_for(download_photos(card.photos, settings.max_photos), PHOTO_WAIT)
+        except asyncio.TimeoutError:
+            photos = []
         return await self.publish(card, phone, photos, caption, seller), bool(photos)
 
     async def deep_check(self, card, region, phone, market, early=None):
@@ -916,17 +958,22 @@ class Monitor:
         return True
 
     async def verify(self, card, region, phone, market, claimed=False):
-        html = await self.avito.fetch(card.url)
+        html = await self.avito.fetch(card.url, aux=True)
         self.store.mark_checked(card.id, card.price)
         if is_closed(html):
             log.info("Снято с публикации: %s", card.url)
             return None
         item = parse_item(html)
         seen = self.store.seen_at(card.id)
-        lag = posted_lag(item.posted, datetime.fromisoformat(seen)) if seen else None
-        if lag is not None:
+        seen_at = datetime.fromisoformat(seen) if seen else None
+        if seen_at and card.published:
+            lag = seen_at.timestamp() - card.published
+        else:
+            lag = posted_lag(item.posted, seen_at) if seen_at else None
+        if lag is not None and lag >= 0:
             self.lags.append(lag)
-        log.info("Свежесть: опубликовано «%s», бот увидел %s, проверено %s — %s", item.posted or "?",
+        exact = f" ({datetime.fromtimestamp(card.published):%H:%M:%S})" if card.published else ""
+        log.info("Свежесть: опубликовано «%s»%s, бот увидел %s, проверено %s — %s", item.posted or "?", exact,
                  seen[11:19] if seen else "?", f"{datetime.now():%H:%M:%S}", card.url)
         params_text = "\n".join(f"{k}: {v}" for k, v in item.params.items())
         full = f"{card.title}\n{item.description or card.snippet}\n{params_text}"
@@ -964,7 +1011,7 @@ class Monitor:
             log.info("Дубль продавца %s: %s", key, card.url)
             return None
         if seller_url and settings.reseller_max_phones > 0:
-            phones = count_seller_phones(await self.avito.fetch(seller_url))
+            phones = count_seller_phones(await self.avito.fetch(seller_url, aux=True))
             if phones >= settings.reseller_max_phones:
                 log.info("Перекуп (%s телефонов): %s", phones, card.url)
                 return None

@@ -24,7 +24,7 @@ class FakeAvito:
     def __init__(self):
         self.urls = []
 
-    async def fetch(self, url):
+    async def fetch(self, url, aux=False):
         self.urls.append(url)
         name = "seller.html" if "/brands/" in url else "item_14pro.html"
         return (FIX / name).read_text(encoding="utf-8")
@@ -513,7 +513,7 @@ def test_blocked_item_not_marked_checked(tmp_path):
     from bot.avito import Blocked
 
     class BlockedAvito(FakeAvito):
-        async def fetch(self, url):
+        async def fetch(self, url, aux=False):
             raise Blocked("Доступ ограничен")
 
     store = Store(tmp_path / "t.sqlite")
@@ -846,7 +846,7 @@ def test_page_candidates_considered_before_next_page(tmp_path, monkeypatch):
         return [Card(id=f"{p}", title="iPhone 13, 128 ГБ", price=1000, url=f"https://www.avito.ru/{region}/x_{p}",
                      date="5 минут назад")]
 
-    async def consider(self, card, region):
+    async def consider(self, card, region, deferred=None):
         events.append(f"consider{card.id}")
         return "нет выгоды"
 
@@ -1029,7 +1029,7 @@ def test_newest_candidates_considered_first(tmp_path, monkeypatch):
         return [Card(id=i, title="iPhone 13, 128 ГБ", price=1000, url=f"https://www.avito.ru/{region}/x_{i}", date=d)
                 for i, d in (("a", "3 часа назад"), ("b", "2 минуты назад"), ("c", "40 минут назад"))]
 
-    async def consider(self, card, region):
+    async def consider(self, card, region, deferred=None):
         order.append(card.id)
         return "нет выгоды"
 

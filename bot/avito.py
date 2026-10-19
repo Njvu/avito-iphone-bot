@@ -26,6 +26,10 @@ class ProxyDown(Blocked):
     pass
 
 
+class Unavailable(Exception):
+    pass
+
+
 def search_url(region: str, page: int = 1) -> str:
     url = f"{BASE}/{region}/{SEARCH_PATH}?s=104&user=1"
     return url + (f"&p={page}" if page > 1 else "")
@@ -53,6 +57,9 @@ STEALTH_ARGS = ["--disable-blink-features=AutomationControlled", "--webrtc-ip-ha
 AUTH_COOKIES = {"sessid", "auth"}
 NEXT_PAGE = '[data-marker="pagination-button/nextPage"]'
 CATALOG_PAUSE = (1.0, 2.0)
+CATALOG_TIMEOUT = 10
+SERVER_ERRORS = {500, 502, 503, 504}
+PHOTO_WAIT = 4
 CATALOG_JS = """(path) => new Promise((resolve) => {
     const x = new XMLHttpRequest();
     x.open('GET', path);
@@ -156,6 +163,8 @@ class Avito:
                 return None
             finally:
                 self._next_request = time.monotonic() + random.uniform(*CATALOG_PAUSE)
+        if res.get("status") in SERVER_ERRORS:
+            raise Unavailable(res["status"])
         if res.get("status") != 200:
             log.info("JSON-запрос списка: HTTP %s%s", res.get("status"), " (PoW)" if res.get("pow") else "")
             return None
@@ -163,7 +172,7 @@ class Avito:
 
     @staticmethod
     async def _catalog_json(page, path: str) -> dict:
-        return await asyncio.wait_for(page.evaluate(CATALOG_JS, path), PAGE_TIMEOUT / 1000)
+        return await asyncio.wait_for(page.evaluate(CATALOG_JS, path), CATALOG_TIMEOUT)
 
     @staticmethod
     async def _solve_pow(page) -> bool:
@@ -200,6 +209,13 @@ class Avito:
 
     async def _page(self):
         return self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
+
+    async def _tab(self, aux: bool):
+        main = await self._page()
+        if not aux:
+            return main, main.url if main.url.startswith(BASE) else None
+        extra = next((p for p in self._ctx.pages if p is not main), None) or await self._ctx.new_page()
+        return extra, main.url if main.url.startswith(BASE) else None
 
     async def captcha_kind(self) -> str | None:
         async with self._lock:
@@ -299,14 +315,13 @@ class Avito:
         self._ctx = self._pw = None
         await self.start()
 
-    async def fetch(self, url: str) -> str:
+    async def fetch(self, url: str, aux: bool = False) -> str:
         async with self._lock:
             if not self._ctx:
                 await self.restart()
             await asyncio.sleep(max(0.0, self._next_request - time.monotonic()))
             try:
-                page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
-                referer = page.url if page.url.startswith(BASE) else None
+                page, referer = await self._tab(aux)
                 await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT, referer=referer)
             except Exception as e:
                 if self.proxy and ("net::" in str(e) or "Timeout" in str(e)):
@@ -314,7 +329,7 @@ class Avito:
                 if not any(w in str(e).lower() for w in ("closed", "target", "crash")):
                     raise
                 await self.restart()
-                page = self._ctx.pages[0] if self._ctx.pages else await self._ctx.new_page()
+                page, _ = await self._tab(aux)
                 await page.goto(url, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT)
             await self._wait_ready(page, url)
             await self._browse(page)

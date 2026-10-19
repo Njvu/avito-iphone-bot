@@ -68,6 +68,7 @@ async def callback_from_admin(c) -> bool:
 router.message.filter(from_admin)
 router.callback_query.filter(callback_from_admin)
 B_FILTER = "🧰 Фильтр"
+B_RESTART = "🔁 Рестарт"
 
 
 def avito_url(raw: str) -> str | None:
@@ -109,7 +110,8 @@ def speed_text() -> str:
     lines = ["<b>⚡ За последний час</b>",
              f"🔍 Проверок: {checks} (раз в {every}), полной загрузкой страницы: {m.count('html')}",
              f"⛔ Блоков: {blocks} · 🔄 смен IP по запросу: {m.count('rotation')}",
-             f"🎯 Постов: {posts} · 🗑 снято после проверки: {m.count('removed')}",
+             f"🎯 Постов: {posts} · 🗑 снято после проверки: {m.count('removed')}"
+             f" · ⌛ пропущено поздних (> {settings.max_post_delay_sec // 60} мин): {m.count('late')}",
              f"⏱ Свежесть (опубликовано → бот увидел): {fresh}"]
     recent = ctx.store.recent_sent(5)
     if recent:
@@ -237,6 +239,44 @@ async def cmd_screen(m: Message):
     await m.answer_photo(BufferedInputFile(shot, "screen.png"), caption="🖥 Браузер бота сейчас")
 
 
+async def relay(m: Message, command: CommandObject, chats: list[int], where: str):
+    if not is_owner(m.from_user.id):
+        return await m.answer("Писать от имени бота могут только владельцы из .env.")
+    if m.chat.type != "private":
+        return await m.answer("Эта команда работает только в личке с ботом.")
+    source, text = m.reply_to_message, (command.args or "").strip()
+    if not source and not text:
+        return await m.answer(f"Напишите /{command.command} текст — или ответьте /{command.command} на сообщение "
+                              f"(фото, видео, файл), и бот перешлёт его {where} от своего имени.")
+    if not chats:
+        return await m.answer(f"Некому отправить: список пуст ({where}).")
+    failed = []
+    for chat in chats:
+        try:
+            if source:
+                await m.bot.copy_message(chat, m.chat.id, source.message_id)
+            else:
+                await m.bot.send_message(chat, text)
+        except Exception as e:
+            failed.append(chat)
+            log.warning("Сообщение от имени бота в %s не доставлено: %s", chat, e)
+    log.info("Владелец %s написал от имени бота %s: доставлено %s из %s", m.from_user.id, where,
+             len(chats) - len(failed), len(chats))
+    note = f"\nНе доставлено: {', '.join(map(str, failed))} (не открывали бота или бот удалён из чата)." if failed else ""
+    await m.answer(f"✅ Отправлено {where}: {len(chats) - len(failed)} из {len(chats)}.{note}")
+
+
+@router.message(Command("say"))
+async def cmd_say(m: Message, command: CommandObject):
+    await relay(m, command, ctx.store.channels(settings.group_chat_id), "в группу")
+
+
+@router.message(Command("say_admins"))
+async def cmd_say_admins(m: Message, command: CommandObject):
+    admins = sorted(ctx.store.admin_ids(settings.admin_ids) - {m.from_user.id})
+    await relay(m, command, admins, "админам в личку")
+
+
 @router.message(Command("browser"))
 async def cmd_browser(m: Message):
     remote = ctx.monitor.remote
@@ -271,11 +311,34 @@ async def cmd_check(m: Message, command: CommandObject):
     await m.answer(html.escape("\n".join(lines)), parse_mode=HTML, disable_web_page_preview=True)
 
 
+def schedule_restart(user_id: int):
+    log.warning("Перезапуск по команде от %s", user_id)
+    asyncio.get_running_loop().call_later(1, lambda: asyncio.ensure_future(ctx.stop()))
+
+
 @router.message(Command("restart"))
 async def cmd_restart(m: Message):
     await m.answer("♻️ Перезапускаю бота — вернусь через ~30 с.")
-    log.warning("Перезапуск по команде /restart от %s", m.from_user.id)
-    asyncio.get_running_loop().call_later(1, lambda: asyncio.ensure_future(ctx.stop()))
+    schedule_restart(m.from_user.id)
+
+
+@router.message(F.text == B_RESTART)
+async def cmd_restart_button(m: Message):
+    await m.answer("Перезапустить бота? Поиск остановится примерно на 30 секунд.",
+                   reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                       InlineKeyboardButton(text="✅ Да, перезапустить", callback_data="rs:yes"),
+                       InlineKeyboardButton(text="Отмена", callback_data="rs:no")]]))
+
+
+@router.callback_query(F.data.startswith("rs:"))
+async def cb_restart(c: CallbackQuery):
+    confirmed = c.data == "rs:yes"
+    if c.message and not isinstance(c.message, InaccessibleMessage):
+        with suppress(TelegramBadRequest):
+            await c.message.edit_text("♻️ Перезапускаю бота — вернусь через ~30 с." if confirmed else "Перезапуск отменён.")
+    await c.answer()
+    if confirmed:
+        schedule_restart(c.from_user.id)
 
 
 def person(u) -> tuple[int | None, str]:
@@ -382,6 +445,8 @@ DEBUG_HELP = """<b>🛠 Отладка и управление</b>
 /check ссылка — пройдёт ли объявление и почему
 /restart — перезапустить бота
 /admins — список админов · /add_admin (ответом или ID) · /remove_admin — только владельцы
+/say текст — написать в группу от имени бота · /say_admins текст — всем админам в личку (только владельцы;
+ответом на сообщение — переслать фото/видео/файл)
 /myid — узнать свой ID (работает у всех)"""
 
 

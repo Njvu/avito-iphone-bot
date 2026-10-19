@@ -1,5 +1,7 @@
 import asyncio
 import json
+import time
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,6 +34,7 @@ def test_parse_catalog_maps_search_fields():
     assert first.date == "1 час назад" and first.delivery and "636x636" not in first.photos[0]
     assert second.below_market and second.location == "р-н Центральный"
     assert "треснутая задняя" in second.snippet
+    assert all(c.published and c.published > 1.7e9 for c in cards)
     assert parse_catalog({}) == [] and parse_catalog(None) == []
 
 
@@ -49,7 +52,7 @@ class Avito:
         self.events.append(("catalog", path))
         return self.data
 
-    async def fetch(self, url):
+    async def fetch(self, url, aux=False):
         await asyncio.sleep(0.05)
         self.events.append(("fetch", url))
         return self.item_html
@@ -106,7 +109,7 @@ class Bot:
         self.edited.append((chat_id, message_id, media.caption))
 
 
-def _below_market(tmp_path, monkeypatch, item_html, price=30000):
+def _below_market(tmp_path, monkeypatch, item_html, price=30000, published=None, seen_ago=0, date=""):
     async def no_photos(urls, limit):
         return []
 
@@ -119,12 +122,15 @@ def _below_market(tmp_path, monkeypatch, item_html, price=30000):
     store = Store(tmp_path / "t.sqlite")
     for condition in ("Отличное", "Хорошее"):
         store.save_eval("14 Pro", 128, condition, 40000, 45000)
+    if seen_ago:
+        store.save_listing("77", "https://www.avito.ru/krasnodar/x_77", "14 Pro", 128, price, "Краснодар", True)
+        store.db.execute("UPDATE listings SET seen_at=?", (datetime.fromtimestamp(time.time() - seen_ago).isoformat(),))
     avito = Avito(item_html=item_html)
     bot = Bot(avito.events)
     m = mon.Monitor(bot, store, avito)
     card = Card(id="77", title="iPhone 14 Pro, 128 ГБ", price=price, url="https://www.avito.ru/krasnodar/x_77",
                 snippet="Целый, всё работает, Face ID работает", condition="Хорошее",
-                seller="Иван", seller_url="https://www.avito.ru/brands/ivan")
+                seller="Иван", seller_url="https://www.avito.ru/brands/ivan", published=published, date=date)
 
     async def run():
         outcome = await m.consider(card, "Краснодар")
@@ -188,7 +194,7 @@ def test_light_cycle_sweeps_models_round_robin(tmp_path, monkeypatch):
     avito = Avito(_catalog())
     m = mon.Monitor(None, store, avito)
 
-    async def consider(card, region):
+    async def consider(card, region, deferred=None):
         return "нет выгоды"
 
     monkeypatch.setattr(m, "consider", consider)
@@ -253,7 +259,7 @@ def test_unverified_instant_post_is_rechecked_next_cycle(tmp_path, monkeypatch):
     calls = []
     real_fetch = avito.fetch
 
-    async def flaky_fetch(url):
+    async def flaky_fetch(url, aux=False):
         calls.append(url)
         if len(calls) == 1:
             raise Blocked("Доступ ограничен")
@@ -321,3 +327,89 @@ def test_unknown_city_id_falls_back_to_pages_and_retries_later(tmp_path, monkeyp
     asyncio.run(m.page_cards("krasnodar", "Краснодар", 1, light=True))
     asyncio.run(m.page_cards("krasnodar", "Краснодар", 1, light=True))
     assert html_pages == [1, 1] and len(lookups) == 1 and not m.avito.events
+
+
+def test_deal_older_than_the_posting_deadline_is_not_posted(tmp_path, monkeypatch):
+    item = (FIX / "item_14pro.html").read_text(encoding="utf-8")
+    monkeypatch.setattr(settings, "max_post_delay_sec", 120)
+    m, bot, avito, store, outcome = _below_market(tmp_path / "a", monkeypatch, item, published=time.time() - 300)
+    assert outcome == "поздно" and avito.events == [] and m.count("late") == 1 and store.was_checked("77", 30000)
+    assert _below_market(tmp_path / "b", monkeypatch, item, published=time.time() - 30)[4] == "мгновенно"
+    assert _below_market(tmp_path / "c", monkeypatch, item, seen_ago=3 * 3600)[4] == "поздно"
+    bumped = _below_market(tmp_path / "e", monkeypatch, item, published=time.time() - 10, date="1 час назад")
+    assert bumped[4] == "поздно"
+    assert _below_market(tmp_path / "f", monkeypatch, item, published=time.time() - 10, date="1 минуту назад")[4] == "мгновенно"
+    monkeypatch.setattr(settings, "max_post_delay_sec", 0)
+    assert _below_market(tmp_path / "d", monkeypatch, item, published=time.time() - 300)[4] == "мгновенно"
+
+
+def test_all_instant_posts_go_out_before_item_checks(tmp_path, monkeypatch):
+    item = (FIX / "item_14pro.html").read_text(encoding="utf-8")
+
+    async def no_photos(urls, limit):
+        return []
+
+    monkeypatch.setattr(mon, "download_photos", no_photos)
+    monkeypatch.setattr(settings, "market_source", "eval")
+    monkeypatch.setattr(settings, "ai_provider", "none")
+    monkeypatch.setattr(settings, "instant_below_min", True)
+    monkeypatch.setattr(settings, "reseller_max_phones", 0)
+    monkeypatch.setattr(settings, "group_chat_id", -5)
+    store = Store(tmp_path / "t.sqlite")
+    for condition in ("Отличное", "Хорошее"):
+        store.save_eval("14 Pro", 128, condition, 40000, 45000)
+    avito = Avito(item_html=item)
+    m = mon.Monitor(Bot(avito.events), store, avito)
+    cards = [Card(id=str(i), title="iPhone 14 Pro, 128 ГБ", price=30000 + i, url=f"https://www.avito.ru/krasnodar/x_{i}",
+                  snippet="Целый, всё работает, Face ID работает", condition="Хорошее",
+                  seller=f"Продавец {i}", seller_url=f"https://www.avito.ru/brands/s{i}") for i in (1, 2)]
+
+    async def run():
+        deferred = []
+        outcomes = [await m.consider(c, "Краснодар", deferred) for c in cards]
+        await asyncio.sleep(0.1)
+        posted_first = [e[0] for e in avito.events]
+        for args in deferred:
+            await m.deep_check(*args)
+        await m.drain()
+        return outcomes, posted_first
+
+    outcomes, posted_first = asyncio.run(run())
+    assert outcomes == ["мгновенно", "мгновенно"] and posted_first == ["post", "post"]
+    assert [e[0] for e in avito.events][2:] == ["fetch", "fetch"]
+
+
+def test_server_error_retries_json_instead_of_loading_the_page(tmp_path, monkeypatch):
+    from bot.avito import Unavailable
+    monkeypatch.setattr(mon, "SERVER_ERROR_RETRY_SEC", 0)
+    monkeypatch.setattr(settings, "fast_json", True)
+    calls = []
+
+    class Flaky:
+        proxy = None
+
+        def __init__(self, failures):
+            self.failures = failures
+
+        async def catalog(self, path):
+            calls.append("json")
+            if self.failures:
+                self.failures -= 1
+                raise Unavailable(503)
+            return _catalog()
+
+        async def fetch(self, url, aux=False):
+            calls.append("html")
+            return ""
+
+    async def location():
+        return 1
+
+    def cards_with(failures, name):
+        m = mon.Monitor(None, Store(tmp_path / name), Flaky(failures))
+        m.location_id = location
+        return asyncio.run(m.page_cards("krasnodar", "Краснодар", 1, True))
+
+    assert cards_with(2, "a.sqlite") == [] and calls == ["json", "json"]
+    calls.clear()
+    assert len(cards_with(1, "b.sqlite")) == 3 and calls == ["json", "json"]

@@ -72,5 +72,6 @@ def parse_catalog(data: dict) -> list[Card]:
             badges=[b["title"] for p in _payloads(item, "BadgeBarStep", "badgebar")
                     for b in p.get("badges") or [] if b.get("title")],
             date=_plain(_payload(item, "DateInfoStep", "date-info").get("relative")),
+            published=item["sortTimeStamp"] / 1000 if item.get("sortTimeStamp") else None,
         ))
     return cards

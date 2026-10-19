@@ -168,3 +168,25 @@ def test_new_session_keeps_only_login_cookies():
     assert asyncio.run(a.logged_in())
     a._ctx = Ctx(["u"])
     assert not asyncio.run(a.logged_in())
+
+
+def test_item_pages_use_a_second_tab_and_keep_search_in_the_first():
+    search = SimpleNamespace(url="https://www.avito.ru/krasnodar/telefony/mobilnye_telefony/apple")
+    extra = SimpleNamespace(url="about:blank")
+
+    class Ctx:
+        pages = [search]
+
+        async def new_page(self):
+            self.pages.append(extra)
+            return extra
+
+    avito = av.Avito()
+    avito._ctx = Ctx()
+
+    async def run():
+        return [await avito._tab(False), await avito._tab(True), await avito._tab(True)]
+
+    first, item, again = asyncio.run(run())
+    assert first == (search, search.url) and item == (extra, search.url) and again[0] is extra
+    assert avito._ctx.pages == [search, extra]

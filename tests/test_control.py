@@ -90,7 +90,7 @@ def test_posted_lag_and_item_price():
 
 def test_explain_reports_verdict_without_side_effects(tmp_path, monkeypatch):
     class Avito:
-        async def fetch(self, url):
+        async def fetch(self, url, aux=False):
             return (FIX / "item_14pro.html").read_text(encoding="utf-8")
 
     store, m = _setup(tmp_path, monkeypatch, Avito())
@@ -165,3 +165,76 @@ def test_browser_pauses_search_and_sends_a_link(tmp_path, monkeypatch):
     m.remote = None
     asyncio.run(control.cmd_browser(Msg()))
     assert "выключена" in answers[3]
+
+
+def test_restart_button_asks_and_restarts_only_on_confirm(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    stopped, markups, edits = [], [], []
+
+    async def stop():
+        stopped.append(1)
+
+    async def noop(*a, **kw):
+        return None
+
+    control.ctx.stop = stop
+
+    class Msg:
+        async def answer(self, text, reply_markup=None, **kw):
+            markups.append(reply_markup)
+
+        async def edit_text(self, text, **kw):
+            edits.append(text)
+
+    async def run():
+        await control.cmd_restart_button(Msg())
+        for data in ("rs:no", "rs:yes"):
+            await control.cb_restart(SimpleNamespace(data=data, message=Msg(), from_user=SimpleNamespace(id=1), answer=noop))
+        await asyncio.sleep(1.3)
+
+    asyncio.run(run())
+    assert markups[0].inline_keyboard[0][0].callback_data == "rs:yes"
+    assert edits[0] == "Перезапуск отменён." and edits[1].startswith("♻️") and stopped == [1]
+
+
+def test_only_owners_write_to_the_group_and_admins_as_the_bot(tmp_path, monkeypatch):
+    store, _ = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(settings, "group_chat_id", -100)
+    store.add_admin(2, "Вася")
+    store.add_admin(3, "Петя")
+    sent, answers = [], []
+
+    class FakeBot:
+        async def send_message(self, chat, text):
+            if chat == 3:
+                raise RuntimeError("chat not found")
+            sent.append(("text", chat, text))
+
+        async def copy_message(self, chat, from_chat, message_id):
+            sent.append(("copy", chat, message_id))
+
+    class Msg:
+        def __init__(self, uid, chat_type="private", reply=None):
+            self.from_user = SimpleNamespace(id=uid)
+            self.chat = SimpleNamespace(type=chat_type, id=uid)
+            self.reply_to_message = reply
+            self.bot = FakeBot()
+
+        async def answer(self, text, **kw):
+            answers.append(text)
+
+    def cmd(args, name="say"):
+        return SimpleNamespace(args=args, command=name)
+
+    async def run():
+        await control.cmd_say(Msg(2), cmd("привет"))
+        await control.cmd_say(Msg(1, "supergroup"), cmd("привет"))
+        await control.cmd_say(Msg(1), cmd(""))
+        await control.cmd_say(Msg(1), cmd("Всем привет"))
+        await control.cmd_say(Msg(1, reply=SimpleNamespace(message_id=55)), cmd(None))
+        await control.cmd_say_admins(Msg(1), cmd("Собрание в 18:00", "say_admins"))
+
+    asyncio.run(run())
+    assert "только владельцы" in answers[0] and "только в личке" in answers[1] and "/say текст" in answers[2]
+    assert sent == [("text", -100, "Всем привет"), ("copy", -100, 55), ("text", 2, "Собрание в 18:00")]
+    assert "1 из 1" in answers[3] and "1 из 1" in answers[4] and "1 из 2" in answers[5] and "3" in answers[5]
